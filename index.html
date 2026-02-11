@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>College GPS Navigation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#2c3e50">
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+  <style>
+    body { margin: 0; font-family: Arial; }
+    h2 { text-align: center; margin: 10px 0; }
+    #map { height: 70vh; width: 100%; }
+    #controls { padding: 10px; background: #f4f4f4; }
+    select, button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 8px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+
+<body>
+
+<h2>📍 College Smart GPS</h2>
+<div id="map"></div>
+
+<div id="controls">
+  <select id="destination">
+    <option value="">-- Select Destination --</option>
+  </select>
+  <button onclick="navigate()">🧭 Start Navigation</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+// =============================
+// LOCATIONS
+// =============================
+const locations = [
+  { name: "Library", lat: 2.397140, lng: 102.381964 },
+  { name: "Admin", lat: 2.396595, lng: 102.381809 },
+  { name: "Canteen", lat: 2.396646, lng: 102.381235 },
+  { name: "Surau", lat: 2.397047, lng: 102.378232 }
+];
+
+// =============================
+// MAP
+// =============================
+const map = L.map("map").setView([2.3966, 102.3808], 17);
+
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: "© OpenStreetMap"
+}).addTo(map);
+
+locations.forEach(loc => {
+  L.marker([loc.lat, loc.lng]).addTo(map).bindPopup(loc.name);
+});
+
+// Dropdown
+const dropdown = document.getElementById("destination");
+locations.forEach((loc, i) => {
+  const option = document.createElement("option");
+  option.value = i;
+  option.textContent = loc.name;
+  dropdown.appendChild(option);
+});
+
+// =============================
+// VARIABLES
+// =============================
+let userMarker, routeLine, arrowMarker;
+let watchID;
+let compassHeading = 0;
+let lastSpoken = 0;
+
+// =============================
+// VOICE FUNCTION
+// =============================
+function speak(text) {
+  const speech = new SpeechSynthesisUtterance(text);
+  speech.lang = "en-US";
+  window.speechSynthesis.speak(speech);
+}
+
+// =============================
+// DISTANCE
+// =============================
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2-lat1) * Math.PI/180;
+  const dLon = (lon2-lon1) * Math.PI/180;
+
+  const a =
+    Math.sin(dLat/2)*Math.sin(dLat/2) +
+    Math.cos(lat1*Math.PI/180) *
+    Math.cos(lat2*Math.PI/180) *
+    Math.sin(dLon/2)*Math.sin(dLon/2);
+
+  const c = 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R*c;
+}
+
+// =============================
+// BEARING
+// =============================
+function calculateBearing(lat1, lon1, lat2, lon2) {
+  const y = Math.sin((lon2-lon1)*Math.PI/180) *
+            Math.cos(lat2*Math.PI/180);
+  const x = Math.cos(lat1*Math.PI/180) *
+            Math.sin(lat2*Math.PI/180) -
+            Math.sin(lat1*Math.PI/180) *
+            Math.cos(lat2*Math.PI/180) *
+            Math.cos((lon2-lon1)*Math.PI/180);
+
+  return (Math.atan2(y,x)*180/Math.PI+360)%360;
+}
+
+// =============================
+// COMPASS
+// =============================
+if (window.DeviceOrientationEvent) {
+  window.addEventListener("deviceorientationabsolute", e => {
+    if (e.alpha !== null) {
+      compassHeading = e.alpha;
+    }
+  });
+}
+
+// =============================
+// NAVIGATION
+// =============================
+function navigate() {
+
+  if (!navigator.geolocation) {
+    alert("Geolocation not supported");
+    return;
+  }
+
+  const selectedIndex = dropdown.value;
+  if (selectedIndex === "") {
+    alert("Select destination");
+    return;
+  }
+
+  const dest = locations[selectedIndex];
+
+  watchID = navigator.geolocation.watchPosition(pos => {
+
+    const userLat = pos.coords.latitude;
+    const userLng = pos.coords.longitude;
+
+    if (userMarker) map.removeLayer(userMarker);
+    if (routeLine) map.removeLayer(routeLine);
+    if (arrowMarker) map.removeLayer(arrowMarker);
+
+    userMarker = L.marker([userLat,userLng])
+      .addTo(map)
+      .bindPopup("📍 You are here")
+      .openPopup();
+
+    routeLine = L.polyline(
+      [[userLat,userLng],[dest.lat,dest.lng]],
+      {color:"blue"}
+    ).addTo(map);
+
+    const distance = calculateDistance(
+      userLat,userLng,dest.lat,dest.lng);
+
+    const bearing = calculateBearing(
+      userLat,userLng,dest.lat,dest.lng);
+
+    arrowMarker = L.marker([userLat,userLng],{
+      icon:L.divIcon({
+        html:`<div style="
+              transform: rotate(${bearing-compassHeading}deg);
+              font-size:30px;">⬆️</div>`
+      })
+    }).addTo(map);
+
+    userMarker.bindPopup(
+      `📍 You are here<br>
+       Distance: ${distance.toFixed(0)} meters`
+    );
+
+    map.setView([userLat,userLng],18);
+
+    // VOICE every 10 sec
+    const now = Date.now();
+    if (now - lastSpoken > 10000) {
+      if (distance < 20) {
+        speak("You have arrived at destination");
+      } else {
+        speak(`Destination is ${distance.toFixed(0)} meters away`);
+      }
+      lastSpoken = now;
+    }
+
+  },{
+    enableHighAccuracy:true
+  });
+}
+
+// =============================
+// SERVICE WORKER
+// =============================
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("service-worker.js");
+}
+</script>
+
+</body>
+</html>
